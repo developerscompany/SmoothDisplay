@@ -224,7 +224,9 @@ The probe result is written to the [log](#troubleshooting), in lines like
 
 ## Command line
 
-The executable inside the bundle doubles as a command line tool:
+The executable inside the bundle doubles as a command line tool. Open the app from Applications once before using it
+from Terminal: until macOS has shown its one-time "downloaded from the Internet" confirmation, a command started from
+Terminal waits for that dialog.
 
 ```bash
 alias smoothdisplay=/Applications/SmoothDisplay.app/Contents/MacOS/SmoothDisplay
