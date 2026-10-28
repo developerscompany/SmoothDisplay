@@ -33,7 +33,7 @@ First public release.
   "About SmoothDisplay" and "Display Settings…".
 - Command line options: `--list`, `--apply WxH`, `--native`, `--brightness [0-100]`,
   `--color [d65|6000k|5500k|native|factory]`, `--login on|off`.
-- English, Ukrainian and Russian localization.
+- English, Ukrainian and Russian localization, following the system language or picked in the "Language" menu.
 - Troubleshooting log in `~/Library/Logs/SmoothDisplay.log`.
 
 [Unreleased]: https://github.com/developerscompany/SmoothDisplay/compare/v1.0.0...HEAD

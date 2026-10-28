@@ -56,7 +56,7 @@ only 16 pixels of width.
 - **Colors that match your MacBook.** Display profiles built from the monitor's real primaries, with a D65, 6000K,
   5500K or native white point.
 - **Thinner text** toggle, **Launch at Login**, update check and a **command line** interface.
-- English, Ukrainian and Russian. No dependencies, no telemetry. Signed with a Developer ID certificate and notarized
+- English, Ukrainian and Russian, switchable in the **Language** menu. No dependencies, no telemetry. Signed with a Developer ID certificate and notarized
   by Apple.
 
 ## Requirements
@@ -419,7 +419,7 @@ SmoothDisplay — безкоштовна програма з відкритим 
 5. Натисніть значок у рядку меню й виберіть «Retina — звичайний розмір».
 
 Потрібна macOS 13 Ventura або новіша. Апаратна яскравість працює лише на Apple Silicon; на Mac з Intel програма
-затемнює картинку програмно (на Intel її не тестували). Меню українською, англійською або російською, за мовою системи.
+затемнює картинку програмно (на Intel її не тестували). Меню українською, англійською або російською: за мовою системи або на вибір у пункті «Мова».
 
 ### Що вміє
 

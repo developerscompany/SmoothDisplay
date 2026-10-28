@@ -75,6 +75,8 @@ UK = {
     "Later": "Пізніше",
     "You're up to date": "У вас найновіша версія",
     "SmoothDisplay %@ is the latest version.": "SmoothDisplay %@ — найновіша версія.",
+    "Language": "Мова",
+    "Same as System": "Як у системі",
 }
 
 RU = {
@@ -146,6 +148,8 @@ RU = {
     "Later": "Позже",
     "You're up to date": "У вас последняя версия",
     "SmoothDisplay %@ is the latest version.": "SmoothDisplay %@ — последняя версия.",
+    "Language": "Язык",
+    "Same as System": "Как в системе",
 }
 
 def source_keys():

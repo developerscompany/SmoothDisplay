@@ -143,6 +143,8 @@ final class Brightness {
     private var methods: [String: Method] = [:]  // main thread only
     private var maximums: [String: Int] = [:]  // main thread only
     private var fractions: [String: Double] = [:]  // main thread only
+    private var lastSet: [String: Date] = [:]  // main thread only
+    private var retries: [String: Int] = [:]  // main thread only
     private let lock = NSLock()
     private var pending: [String: (display: ExternalDisplay, value: Int)] = [:]
 
@@ -170,8 +172,10 @@ final class Brightness {
     /// A monitor that is still waking up (no answer, or a stale one) gets a few more tries before it is
     /// declared software-only.
     func probe(_ display: ExternalDisplay, then done: @escaping (Method) -> Void = { _ in }) {
+        let started = Date()
         queue.async {
             var outcome: (method: Method, current: Int, maximum: Int) = (.software, 0, 100)
+            var answered = false
             for (attempt, pause) in [0, 500_000, 1_000_000, 2_000_000].enumerated() {
                 usleep(UInt32(pause))
                 if attempt > 0 { self.channels[display.key] = nil } // the proxy may have been recreated
@@ -179,6 +183,7 @@ final class Brightness {
                     DebugLog.write("probe \(display.name) #\(attempt + 1): no DDC answer")
                     continue
                 }
+                answered = true
                 let test = before.current < before.maximum ? before.current + 1 : before.current - 1
                 channel.write(0x10, UInt16(test))
                 usleep(300_000)
@@ -190,18 +195,36 @@ final class Brightness {
                 // An answer that ignored the write is worth one retry; a clear yes is final.
                 if accepted || (after != nil && attempt >= 1) { break }
             }
-            DebugLog.write("probe \(display.name) -> \(outcome.method)")
             DispatchQueue.main.async {
-                self.methods[display.key] = outcome.method
-                self.maximums[display.key] = outcome.maximum
+                let key = display.key
+                // Silence (a monitor still waking, a slow dock) says nothing about DDC support: keep what was
+                // known and look again later instead of switching a working monitor to software dimming.
+                if !answered, let known = self.methods[key] {
+                    let attempt = (self.retries[key] ?? 0) + 1
+                    self.retries[key] = attempt
+                    DebugLog.write("probe \(display.name): no answer, keeping \(known)" + (attempt <= 3 ? ", retrying" : ""))
+                    if attempt <= 3 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self.probe(display) }
+                    }
+                    done(known)
+                    return
+                }
+                self.retries[key] = nil
+                DebugLog.write("probe \(display.name) -> \(outcome.method)")
+                let changed = self.methods[key] != outcome.method
+                self.methods[key] = outcome.method
+                self.maximums[key] = outcome.maximum
+                // A key press during the probe already set a newer level; don't jump back to the probe's reading.
+                let userMoved = (self.lastSet[key] ?? .distantPast) > started
                 switch outcome.method {
                 case .hardware:
-                    self.fractions[display.key] = Double(outcome.current) / Double(outcome.maximum)
-                    if self.appliesDimming { SoftwareDimming.apply(1, to: display.id) }
+                    if !userMoved { self.fractions[key] = Double(outcome.current) / Double(outcome.maximum) }
+                    if self.appliesDimming && changed { SoftwareDimming.apply(1, to: display.id) }
                 case .software:
-                    let level = UserDefaults.standard.object(forKey: self.softwareKey(display)) as? Double ?? 1
-                    self.fractions[display.key] = level
-                    if self.appliesDimming { SoftwareDimming.apply(level, to: display.id) }
+                    if !userMoved || changed {
+                        self.fractions[key] = UserDefaults.standard.object(forKey: self.softwareKey(display)) as? Double ?? 1
+                    }
+                    if self.appliesDimming { SoftwareDimming.apply(self.fractions[key] ?? 1, to: display.id) }
                 }
                 done(outcome.method)
             }
@@ -215,6 +238,7 @@ final class Brightness {
         guard let method = methods[display.key] else { return }
         let fraction = min(1, max(0, fraction))
         fractions[display.key] = fraction
+        lastSet[display.key] = Date()
         switch method {
         case .software:
             UserDefaults.standard.set(fraction, forKey: softwareKey(display))
@@ -258,6 +282,7 @@ final class Brightness {
             pending[key] = nil
             lock.unlock()
             let sent = channel(item.display)?.write(0x10, UInt16(item.value)) == true
+            if !sent { channels[key] = nil } // look the service up again next time
             DebugLog.write("DDC write \(item.display.name) brightness=\(item.value) \(sent ? "ok" : "FAILED")")
         }
     }

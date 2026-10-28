@@ -33,12 +33,12 @@ struct ExternalDisplay {
     /// Position among online monitors with the same vendor, model and serial (identical monitors often
     /// report serial 0), ordered by unit number; 0 when the monitor is unique.
     var twinIndex = 0
-    var hasTwins = false
 
-    /// Stable across reconnects, unlike CGDirectDisplayID. Identical monitors are told apart by unit number.
+    /// Stable across reconnects, unlike CGDirectDisplayID. The first of several identical monitors keeps the
+    /// plain key, so when one of them is unplugged the other still finds its settings.
     var key: String {
         let base = String(format: "%x-%x-%x", vendor, model, serial)
-        return hasTwins ? "\(base)-u\(CGDisplayUnitNumber(id))" : base
+        return twinIndex == 0 ? base : "\(base)-\(twinIndex + 1)"
     }
 
     var currentMode: CGDisplayMode? { CGDisplayCopyDisplayMode(id) }
@@ -131,7 +131,6 @@ enum Displays {
             let twins = displays.filter {
                 $0.vendor == displays[i].vendor && $0.model == displays[i].model && $0.serial == displays[i].serial
             }.sorted { CGDisplayUnitNumber($0.id) < CGDisplayUnitNumber($1.id) }
-            displays[i].hasTwins = twins.count > 1
             displays[i].twinIndex = twins.firstIndex { $0.id == displays[i].id } ?? 0
         }
         return displays

@@ -130,7 +130,9 @@ enum ICC {
             toPanel = Matrix.adaptation(from: Matrix.d50, to: w)
         }
         let white = r.indices.map { r[$0] + g[$0] + b[$0] }
-        let curves = ["rTRC", "gTRC", "bTRC"].compactMap { sig in tags[sig].map { Data(data[$0.offset..<$0.offset + $0.size]) } }
+        let curves = ["rTRC", "gTRC", "bTRC"].compactMap { sig in
+            tags[sig].flatMap { v2Curve(Data(data[$0.offset..<$0.offset + $0.size])) }
+        }
         let gamut = Gamut(red: XY(xyz: Matrix.apply(toPanel, r)),
                           green: XY(xyz: Matrix.apply(toPanel, g)),
                           blue: XY(xyz: Matrix.apply(toPanel, b)),
@@ -142,38 +144,52 @@ enum ICC {
 
     /// Gamma that matches the tone curve at mid-grey, for `curv` tables and every `para` function type.
     private static func effectiveGamma(_ tag: Data) -> Double? {
+        guard let y = toneValue(tag, at: 0.5), y > 0, y < 1 else { return nil }
+        return log(y) / log(0.5)
+    }
+
+    /// Evaluates a `curv` or `para` tone curve at x in 0…1.
+    private static func toneValue(_ tag: Data, at x: Double) -> Double? {
         guard tag.count >= 12 else { return nil }
         let bytes = [UInt8](tag)
         func u32(_ o: Int) -> UInt32 { bytes[o..<o + 4].reduce(0) { $0 << 8 | UInt32($1) } }
         func u16(_ o: Int) -> Double { Double(UInt16(bytes[o]) << 8 | UInt16(bytes[o + 1])) }
         func s15(_ o: Int) -> Double { Double(Int32(bitPattern: u32(o))) / 65536 }
-        let y: Double
         switch u32(0) {
         case 0x6375_7276: // 'curv'
             let count = Int(u32(8))
             guard count > 0, tag.count >= 12 + count * 2 else { return nil }
-            if count == 1 { return u16(12) / 256 }
-            let position = 0.5 * Double(count - 1)
-            let i = Int(position), t = position - Double(i)
-            y = (u16(12 + i * 2) * (1 - t) + u16(12 + min(i + 1, count - 1) * 2) * t) / 65535
+            if count == 1 { return pow(x, u16(12) / 256) }
+            let position = x * Double(count - 1)
+            let i = min(Int(position), count - 1), t = position - Double(i)
+            return (u16(12 + i * 2) * (1 - t) + u16(12 + min(i + 1, count - 1) * 2) * t) / 65535
         case 0x7061_7261: // 'para'
             let type = Int(u32(8) >> 16)
             let counts = [1, 3, 4, 5, 7]
             guard type < counts.count, tag.count >= 12 + counts[type] * 4 else { return nil }
             let p = (0..<counts[type]).map { s15(12 + $0 * 4) }
-            let x = 0.5
+            func power(_ v: Double) -> Double { v > 0 ? pow(v, p[0]) : 0 }
             switch type {
-            case 0: y = pow(x, p[0])
-            case 1: y = x >= -p[2] / p[1] ? pow(p[1] * x + p[2], p[0]) : 0
-            case 2: y = x >= -p[2] / p[1] ? pow(p[1] * x + p[2], p[0]) + p[3] : p[3]
-            case 3: y = x >= p[4] ? pow(p[1] * x + p[2], p[0]) : p[3] * x
-            default: y = x >= p[4] ? pow(p[1] * x + p[2], p[0]) + p[5] : p[3] * x + p[6]
+            case 0: return pow(x, p[0])
+            case 1: return x >= -p[2] / p[1] ? power(p[1] * x + p[2]) : 0
+            case 2: return x >= -p[2] / p[1] ? power(p[1] * x + p[2]) + p[3] : p[3]
+            case 3: return x >= p[4] ? power(p[1] * x + p[2]) : p[3] * x
+            default: return x >= p[4] ? power(p[1] * x + p[2]) + p[5] : p[3] * x + p[6]
             }
         default:
             return nil
         }
-        guard y > 0, y < 1 else { return nil }
-        return log(y) / log(0.5)
+    }
+
+    /// `para` is an ICC v4 type; a v2 profile gets the same curve as a 1024-entry `curv` table.
+    private static func v2Curve(_ tag: Data) -> Data? {
+        guard tag.count >= 4 else { return nil }
+        if tag.prefix(4) == Data("curv".utf8) { return tag }
+        let samples = (0..<1024).compactMap { toneValue(tag, at: Double($0) / 1023) }
+        guard samples.count == 1024, samples.allSatisfy(\.isFinite) else { return nil }
+        return samples.reduce(ascii("curv") + u32(0) + u32(1024)) {
+            $0 + u16(UInt16(min(max($1, 0), 1) * 65535))
+        }
     }
 
     /// An ICC v2 matrix/TRC display profile for `panel`.
@@ -350,7 +366,9 @@ enum ColorProfiles {
 
     static func profileURL(_ display: ExternalDisplay, _ target: WhiteTarget) -> URL {
         let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
-        let model = String(display.name.replacingOccurrences(of: " ", with: "-").filter(allowed.contains).prefix(60))
+        var model = String(display.name.replacingOccurrences(of: " ", with: "-").filter(allowed.contains).prefix(60))
+        // Names that are not Latin (or the localized "Monitor N" fallback) would collapse to nothing useful.
+        if !model.contains(where: \.isLetter) { model = display.key }
         return folder.appendingPathComponent("SmoothDisplay-\(model)-\(target.fileTag).icc")
     }
 

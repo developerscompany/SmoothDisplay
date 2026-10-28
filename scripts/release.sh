@@ -17,7 +17,7 @@ dmg="$out/SmoothDisplay-$version.dmg"
 
 # SHA-1 of the identity avoids "ambiguous" errors when an old and a renewed certificate share a name.
 identity=$(security find-identity -v -p codesigning |
-  awk -v team="($team)\"" 'index($0, "\"Developer ID Application:") && index($0, team) { print $2; exit }')
+  awk -v team="($team)\"" 'index($0, "\"Developer ID Application:") && index($0, team) { print $2; exit }' || true)
 [ -n "$identity" ] || { echo "error: no Developer ID Application certificate for team $team" >&2; exit 1; }
 if ! err=$(xcrun notarytool history --keychain-profile "$profile" 2>&1 >/dev/null); then
   echo "error: notarytool profile '$profile' unusable: $err" >&2

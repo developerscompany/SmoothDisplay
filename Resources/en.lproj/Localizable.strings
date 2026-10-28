@@ -35,6 +35,8 @@
 "Check for Updates Automatically" = "Check for Updates Automatically";
 "About SmoothDisplay" = "About SmoothDisplay";
 "Quit SmoothDisplay" = "Quit SmoothDisplay";
+"Same as System" = "Same as System";
+"Language" = "Language";
 "Couldn't switch to %@." = "Couldn't switch to %@.";
 "macOS did not accept the color profile." = "macOS did not accept the color profile.";
 "Couldn't change Launch at Login: %@" = "Couldn't change Launch at Login: %@";

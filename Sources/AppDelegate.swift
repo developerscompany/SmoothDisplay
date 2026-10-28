@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menu = NSMenu()
     private var pendingRestore: DispatchWorkItem?
     private var pendingProbe: DispatchWorkItem?
+    private var pendingDimming: DispatchWorkItem?
     private var lastConnectOrWake = Date()
     private var lastOwnModeChange = Date.distantPast
     private let keys = MediaKeys()
@@ -74,6 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }, nil)
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
+        // Display sleep without system sleep also makes some monitors re-link and drop to 1×.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(didWake), name: NSWorkspace.screensDidWakeNotification, object: nil)
         // A new profile reloads the gamma table and wipes software dimming.
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(profilesChanged),
@@ -105,8 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func didWake() {
         lastConnectOrWake = Date()
+        Brightness.shared.reset() // the DDC service objects may have been recreated
         scheduleRestore(after: 3)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { SoftwareDimming.reapply() }
+        scheduleDimming(after: 3)
     }
 
     private func displayReconfigured(_ id: CGDirectDisplayID, _ flags: CGDisplayChangeSummaryFlags) {
@@ -115,21 +120,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Brightness.shared.reset()
             scheduleRestore(after: 2)
             scheduleProbe(after: 4)
+        } else if flags.contains(.removeFlag) || flags.contains(.disabledFlag) {
+            // With identical monitors the remaining one may take over the other's key.
+            scheduleProbe(after: 1)
         } else if flags.contains(.setModeFlag) {
-            profilesChanged() // a mode change reloads the gamma table, so software dimming must be re-applied
-            rememberModeChosenElsewhere(id)
+            scheduleDimming(after: 0.6) // a mode change reloads the gamma table
+            modeChangedElsewhere(id)
         }
     }
 
-    /// A mode change SmoothDisplay did not make, well after a connect or wake, is the user's own choice
-    /// (e.g. in System Settings): remember it instead of undoing it on the next reconnect.
-    private func rememberModeChosenElsewhere(_ id: CGDirectDisplayID) {
-        guard Date().timeIntervalSince(lastOwnModeChange) > 3, Date().timeIntervalSince(lastConnectOrWake) > 8,
+    /// A mode change SmoothDisplay did not make. A drop to a 1× mode is macOS falling back (the reason Keep Mode
+    /// exists), so it is undone. A different Retina size is the user's choice, e.g. in System Settings, so it is
+    /// remembered instead of being undone on the next reconnect.
+    private func modeChangedElsewhere(_ id: CGDirectDisplayID) {
+        guard Preferences.keepModes, Date().timeIntervalSince(lastOwnModeChange) > 3,
               let display = Displays.external().first(where: { $0.id == id }),
               let mode = display.currentMode,
               let remembered = Preferences.desiredMode(for: display), remembered != mode.spec else { return }
-        Preferences.setDesiredMode(mode.spec, for: display)
-        DebugLog.write("\(display.name): \(mode.spec.size) was chosen outside SmoothDisplay, remembering it")
+        if mode.spec.isHiDPI || !remembered.isHiDPI {
+            guard Date().timeIntervalSince(lastConnectOrWake) > 8 else { return }
+            Preferences.setDesiredMode(mode.spec, for: display)
+            DebugLog.write("\(display.name): \(mode.spec.size) was chosen outside SmoothDisplay, remembering it")
+        } else {
+            DebugLog.write("\(display.name): dropped to \(mode.spec.size), restoring \(remembered.size)")
+            scheduleRestore(after: 2)
+        }
+    }
+
+    /// Coalesced, so a burst of display callbacks resets the gamma tables once.
+    private func scheduleDimming(after seconds: Double) {
+        pendingDimming?.cancel()
+        let work = DispatchWorkItem { SoftwareDimming.reapply() }
+        pendingDimming = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
     private func scheduleProbe(after seconds: Double) {
@@ -140,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func profilesChanged() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { SoftwareDimming.reapply() }
+        scheduleDimming(after: 0.6)
     }
 
     private func scheduleRestore(after seconds: Double) {
@@ -166,14 +189,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func startBrightnessKeys() {
         guard Preferences.brightnessKeys, !keys.isRunning else { return }
-        if MediaKeys.isAllowed {
-            keys.start()
+        if MediaKeys.isAllowed, keys.start() {
             permissionTimer?.invalidate()
             permissionTimer = nil
         } else if permissionTimer == nil {
-            // Pick up the permission as soon as it is granted in System Settings.
+            // Pick up the permission as soon as it is granted in System Settings (and retry a failed tap).
             permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                if MediaKeys.isAllowed { self?.startBrightnessKeys() }
+                guard let self, Preferences.brightnessKeys else { return }
+                if MediaKeys.isAllowed { self.startBrightnessKeys() }
             }
         }
     }
@@ -321,12 +344,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addToggle(L("Launch at Login"), LoginItem.isEnabled, #selector(toggleLogin))
         addToggle(L("Thinner Text (applies after apps restart)"), FontSmoothing.isThin, #selector(toggleThinFont))
 
+        addLanguageMenu()
+
         menu.addItem(.separator())
         addAction(L("Display Settings…"), #selector(openDisplaySettings))
         addAction(L("Check for Updates…"), #selector(checkForUpdates))
         addToggle(L("Check for Updates Automatically"), Updates.automatic, #selector(toggleAutomaticUpdates))
         addAction(L("About SmoothDisplay"), #selector(about))
         menu.addItem(NSMenuItem(title: L("Quit SmoothDisplay"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    }
+
+    private func addLanguageMenu() {
+        let languages = NSMenu()
+        let system = NSMenuItem(title: L("Same as System"), action: #selector(chooseLanguage(_:)), keyEquivalent: "")
+        system.target = self
+        system.state = Localization.chosen == nil ? .on : .off
+        languages.addItem(system)
+        languages.addItem(.separator())
+        for language in Localization.languages {
+            let item = NSMenuItem(title: language.name, action: #selector(chooseLanguage(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = language.code
+            item.state = Localization.chosen == language.code ? .on : .off
+            languages.addItem(item)
+        }
+        let item = NSMenuItem(title: L("Language"), action: nil, keyEquivalent: "")
+        item.submenu = languages
+        menu.addItem(item)
+    }
+
+    @objc private func chooseLanguage(_ sender: NSMenuItem) {
+        Localization.chosen = sender.representedObject as? String
     }
 
     private func addToggle(_ title: String, _ on: Bool, _ action: Selector) {
@@ -399,6 +447,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             startBrightnessKeys()
         } else {
             keys.stop()
+            permissionTimer?.invalidate()
+            permissionTimer = nil
         }
     }
 
@@ -442,11 +492,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func unlockRetina(_ sender: NSMenuItem) {
         guard let display = (sender.representedObject as? DisplayRef)?.display else { return }
-        do {
-            try RetinaUnlock.install(for: display)
-            alert(L("Done. Unplug and reconnect the monitor cable (or restart the Mac); Retina modes will then appear in the menu."))
-        } catch {
-            alert(error.localizedDescription)
+        sender.isEnabled = false
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result { try RetinaUnlock.install(for: display) }
+            DispatchQueue.main.async { [weak self] in
+                switch result {
+                case .success:
+                    self?.alert(L("Done. Unplug and reconnect the monitor cable (or restart the Mac); Retina modes will then appear in the menu."))
+                case .failure(let error):
+                    self?.alert(error.localizedDescription)
+                }
+            }
         }
     }
 

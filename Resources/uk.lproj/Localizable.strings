@@ -35,6 +35,8 @@
 "Check for Updates Automatically" = "Перевіряти оновлення автоматично";
 "About SmoothDisplay" = "Про SmoothDisplay";
 "Quit SmoothDisplay" = "Вийти з SmoothDisplay";
+"Same as System" = "Як у системі";
+"Language" = "Мова";
 "Couldn't switch to %@." = "Не вдалося перемкнути на %@.";
 "macOS did not accept the color profile." = "macOS не прийняла колірний профіль.";
 "Couldn't change Launch at Login: %@" = "Не вдалося змінити автозапуск: %@";
