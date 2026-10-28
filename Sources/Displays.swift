@@ -33,6 +33,8 @@ struct ExternalDisplay {
     /// Position among online monitors with the same vendor, model and serial (identical monitors often
     /// report serial 0), ordered by unit number; 0 when the monitor is unique.
     var twinIndex = 0
+    /// False when macOS gave no name and `name` is the generic "Monitor N" fallback.
+    var hasName = true
 
     /// Stable across reconnects, unlike CGDirectDisplayID. The first of several identical monitors keeps the
     /// plain key, so when one of them is unplugged the other still finds its settings.
@@ -119,12 +121,14 @@ enum Displays {
         var displays = ids.prefix(Int(count))
             .filter { CGDisplayIsBuiltin($0) == 0 && CGDisplayMirrorsDisplay($0) == kCGNullDirectDisplay }
             .map { id in
-                ExternalDisplay(
+                let screenName = screenName(for: id)
+                return ExternalDisplay(
                     id: id,
-                    name: screenName(for: id) ?? L("Monitor %u", id),
+                    name: screenName ?? L("Monitor %u", id),
                     vendor: CGDisplayVendorNumber(id),
                     model: CGDisplayModelNumber(id),
-                    serial: CGDisplaySerialNumber(id)
+                    serial: CGDisplaySerialNumber(id),
+                    hasName: screenName != nil
                 )
             }
         for i in displays.indices {
@@ -134,6 +138,14 @@ enum Displays {
             displays[i].twinIndex = twins.firstIndex { $0.id == displays[i].id } ?? 0
         }
         return displays
+    }
+
+    /// Number of external displays, from CoreGraphics only, so it is safe off the main thread.
+    static func externalCount() -> Int {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success else { return 0 }
+        return ids.prefix(Int(count)).filter { CGDisplayIsBuiltin($0) == 0 && CGDisplayMirrorsDisplay($0) == kCGNullDirectDisplay }.count
     }
 
     /// Finds a monitor again for a menu action: by display id first, by key if it was reconnected meanwhile.

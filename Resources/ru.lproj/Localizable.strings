@@ -18,8 +18,8 @@
 "Now: %@ · %@ · %ld Hz" = "Сейчас: %@ · %@ · %ld Гц";
 "More Retina Sizes" = "Другие размеры Retina";
 "Standard Mode, No HiDPI  (%@)" = "Обычный режим без HiDPI  (%@)";
-"Retina unlocked — reconnect the monitor cable" = "Retina разблокирован — переподключите кабель монитора";
 "Unlock Retina Modes…" = "Разблокировать режимы Retina…";
+"Retina unlocked — reconnect the monitor cable" = "Retina разблокирован — переподключите кабель монитора";
 "White point (profile built from the panel's real primaries)" = "Белая точка (профиль из реальных цветов матрицы)";
 "macOS Factory Profile (from monitor data)" = "Заводской профиль macOS (из данных монитора)";
 "Turn off True Tone on the built-in display when comparing" = "Для сравнения выключите True Tone на встроенном экране";

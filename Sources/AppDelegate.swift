@@ -39,6 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pendingRestore: DispatchWorkItem?
     private var pendingProbe: DispatchWorkItem?
     private var pendingDimming: DispatchWorkItem?
+    private var dimmingDeadline = DispatchTime.now()
+    private var probeDeadline = DispatchTime.now()
+    private var autoRestores = 0
+    private var unlocking = Set<String>()
     private var lastConnectOrWake = Date()
     private var lastOwnModeChange = Date.distantPast
     private let keys = MediaKeys()
@@ -109,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func didWake() {
         lastConnectOrWake = Date()
+        autoRestores = 0
         Brightness.shared.reset() // the DDC service objects may have been recreated
         scheduleRestore(after: 3)
         scheduleDimming(after: 3)
@@ -117,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func displayReconfigured(_ id: CGDirectDisplayID, _ flags: CGDisplayChangeSummaryFlags) {
         if flags.contains(.addFlag) || flags.contains(.enabledFlag) {
             lastConnectOrWake = Date()
+            autoRestores = 0
             Brightness.shared.reset()
             scheduleRestore(after: 2)
             scheduleProbe(after: 4)
@@ -129,37 +135,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// A mode change SmoothDisplay did not make. A drop to a 1× mode is macOS falling back (the reason Keep Mode
-    /// exists), so it is undone. A different Retina size is the user's choice, e.g. in System Settings, so it is
-    /// remembered instead of being undone on the next reconnect.
+    /// A mode change SmoothDisplay did not make. A drop to 1× shortly after a connect or wake is macOS falling
+    /// back (the reason Keep Mode exists), so it is undone, a few times at most so nothing can ping-pong. Any other
+    /// change, later, is the user's choice (e.g. in System Settings) and is remembered instead of being undone.
     private func modeChangedElsewhere(_ id: CGDirectDisplayID) {
-        guard Preferences.keepModes, Date().timeIntervalSince(lastOwnModeChange) > 3,
+        guard Date().timeIntervalSince(lastOwnModeChange) > 3,
               let display = Displays.external().first(where: { $0.id == id }),
               let mode = display.currentMode,
               let remembered = Preferences.desiredMode(for: display), remembered != mode.spec else { return }
-        if mode.spec.isHiDPI || !remembered.isHiDPI {
-            guard Date().timeIntervalSince(lastConnectOrWake) > 8 else { return }
-            Preferences.setDesiredMode(mode.spec, for: display)
-            DebugLog.write("\(display.name): \(mode.spec.size) was chosen outside SmoothDisplay, remembering it")
-        } else {
+        let sinceConnect = Date().timeIntervalSince(lastConnectOrWake)
+        if !mode.spec.isHiDPI && remembered.isHiDPI && sinceConnect < 20 {
+            guard Preferences.keepModes, autoRestores < 3 else { return }
+            autoRestores += 1
             DebugLog.write("\(display.name): dropped to \(mode.spec.size), restoring \(remembered.size)")
             scheduleRestore(after: 2)
+        } else if sinceConnect > 8 {
+            Preferences.setDesiredMode(mode.spec, for: display)
+            DebugLog.write("\(display.name): \(mode.spec.size) was chosen outside SmoothDisplay, remembering it")
         }
     }
 
-    /// Coalesced, so a burst of display callbacks resets the gamma tables once.
+    /// Coalesced, so a burst of display callbacks resets the gamma tables once. A later run that is already
+    /// planned (e.g. after wake, once ColorSync has reloaded) is kept rather than replaced by an earlier one.
     private func scheduleDimming(after seconds: Double) {
+        let deadline = DispatchTime.now() + seconds
+        if let pending = pendingDimming, !pending.isCancelled, dimmingDeadline >= deadline { return }
         pendingDimming?.cancel()
         let work = DispatchWorkItem { SoftwareDimming.reapply() }
         pendingDimming = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+        dimmingDeadline = deadline
+        DispatchQueue.main.asyncAfter(deadline: deadline, execute: work)
     }
 
+    /// Same coalescing as scheduleDimming: a probe planned for after the mode settles is never pulled earlier.
     private func scheduleProbe(after seconds: Double) {
+        let deadline = DispatchTime.now() + seconds
+        if let pending = pendingProbe, !pending.isCancelled, probeDeadline >= deadline { return }
         pendingProbe?.cancel()
         let work = DispatchWorkItem { Displays.external().forEach { Brightness.shared.probe($0) } }
         pendingProbe = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+        probeDeadline = deadline
+        DispatchQueue.main.asyncAfter(deadline: deadline, execute: work)
     }
 
     @objc private func profilesChanged() {
@@ -293,7 +309,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addColorMenu(for: display)
 
         if !display.hasNearNativeRetina {
-            if RetinaUnlock.isInstalled(for: display) {
+            if unlocking.contains(display.key) {
+                menu.addItem(disabled(L("Unlock Retina Modes…")))
+            } else if RetinaUnlock.isInstalled(for: display) {
                 menu.addItem(disabled(L("Retina unlocked — reconnect the monitor cable")))
             } else {
                 let item = NSMenuItem(title: L("Unlock Retina Modes…"), action: #selector(unlockRetina(_:)), keyEquivalent: "")
@@ -491,11 +509,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func unlockRetina(_ sender: NSMenuItem) {
-        guard let display = (sender.representedObject as? DisplayRef)?.display else { return }
-        sender.isEnabled = false
+        guard let display = (sender.representedObject as? DisplayRef)?.display,
+              unlocking.insert(display.key).inserted else { return }
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result { try RetinaUnlock.install(for: display) }
             DispatchQueue.main.async { [weak self] in
+                self?.unlocking.remove(display.key)
                 switch result {
                 case .success:
                     self?.alert(L("Done. Unplug and reconnect the monitor cable (or restart the Mac); Retina modes will then appear in the menu."))
@@ -511,6 +530,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = "SmoothDisplay"
         alert.informativeText = text
+        alert.addButton(withTitle: L("OK"))
         alert.runModal()
     }
 }

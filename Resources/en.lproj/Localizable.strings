@@ -18,8 +18,8 @@
 "Now: %@ · %@ · %ld Hz" = "Now: %@ · %@ · %ld Hz";
 "More Retina Sizes" = "More Retina Sizes";
 "Standard Mode, No HiDPI  (%@)" = "Standard Mode, No HiDPI  (%@)";
-"Retina unlocked — reconnect the monitor cable" = "Retina unlocked — reconnect the monitor cable";
 "Unlock Retina Modes…" = "Unlock Retina Modes…";
+"Retina unlocked — reconnect the monitor cable" = "Retina unlocked — reconnect the monitor cable";
 "White point (profile built from the panel's real primaries)" = "White point (profile built from the panel's real primaries)";
 "macOS Factory Profile (from monitor data)" = "macOS Factory Profile (from monitor data)";
 "Turn off True Tone on the built-in display when comparing" = "Turn off True Tone on the built-in display when comparing";

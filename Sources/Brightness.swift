@@ -87,7 +87,7 @@ final class DDC {
             }
         }
         if display.twinIndex < matches.count { return matches[display.twinIndex] }
-        if matches.isEmpty, unidentified.count == 1, Displays.external().count == 1 { return unidentified[0] }
+        if matches.isEmpty, unidentified.count == 1, Displays.externalCount() == 1 { return unidentified[0] }
         return matches.first
     }
 
@@ -144,7 +144,6 @@ final class Brightness {
     private var maximums: [String: Int] = [:]  // main thread only
     private var fractions: [String: Double] = [:]  // main thread only
     private var lastSet: [String: Date] = [:]  // main thread only
-    private var retries: [String: Int] = [:]  // main thread only
     private let lock = NSLock()
     private var pending: [String: (display: ExternalDisplay, value: Int)] = [:]
 
@@ -171,7 +170,7 @@ final class Brightness {
     /// Finds out whether the monitor obeys DDC brightness: nudges it by one step, reads back, puts it back.
     /// A monitor that is still waking up (no answer, or a stale one) gets a few more tries before it is
     /// declared software-only.
-    func probe(_ display: ExternalDisplay, then done: @escaping (Method) -> Void = { _ in }) {
+    func probe(_ display: ExternalDisplay, retry: Int = 0, then done: @escaping (Method) -> Void = { _ in }) {
         let started = Date()
         queue.async {
             var outcome: (method: Method, current: Int, maximum: Int) = (.software, 0, 100)
@@ -183,7 +182,6 @@ final class Brightness {
                     DebugLog.write("probe \(display.name) #\(attempt + 1): no DDC answer")
                     continue
                 }
-                answered = true
                 let test = before.current < before.maximum ? before.current + 1 : before.current - 1
                 channel.write(0x10, UInt16(test))
                 usleep(300_000)
@@ -193,23 +191,29 @@ final class Brightness {
                 DebugLog.write("probe \(display.name) #\(attempt + 1): DDC \(before.current)/\(before.maximum), wrote \(test), read \(after.map { "\($0.current)" } ?? "nothing")")
                 outcome = (accepted ? .hardware : .software, before.current, before.maximum)
                 // An answer that ignored the write is worth one retry; a clear yes is final.
-                if accepted || (after != nil && attempt >= 1) { break }
+                // Only a definite result counts as an answer: one stale reading followed by silence does not.
+                if accepted || (after != nil && attempt >= 1) {
+                    answered = true
+                    break
+                }
             }
             DispatchQueue.main.async {
                 let key = display.key
                 // Silence (a monitor still waking, a slow dock) says nothing about DDC support: keep what was
                 // known and look again later instead of switching a working monitor to software dimming.
                 if !answered, let known = self.methods[key] {
-                    let attempt = (self.retries[key] ?? 0) + 1
-                    self.retries[key] = attempt
-                    DebugLog.write("probe \(display.name): no answer, keeping \(known)" + (attempt <= 3 ? ", retrying" : ""))
-                    if attempt <= 3 {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self.probe(display) }
+                    DebugLog.write("probe \(display.name): no clear answer, keeping \(known)" + (retry < 3 ? ", retrying" : ""))
+                    if retry < 3 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                            // Look the monitor up again: it may have been reconnected under a new id.
+                            if let current = Displays.find(id: display.id, key: display.key) {
+                                self.probe(current, retry: retry + 1)
+                            }
+                        }
                     }
                     done(known)
                     return
                 }
-                self.retries[key] = nil
                 DebugLog.write("probe \(display.name) -> \(outcome.method)")
                 let changed = self.methods[key] != outcome.method
                 self.methods[key] = outcome.method

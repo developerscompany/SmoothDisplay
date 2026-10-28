@@ -21,21 +21,18 @@ enum Localization {
     /// rebuilt every time it opens.
     static var chosen: String? {
         get { UserDefaults.standard.string(forKey: "language") }
-        set {
-            UserDefaults.standard.set(newValue, forKey: "language")
-            table = nil
-        }
+        set { UserDefaults.standard.set(newValue, forKey: "language") }
     }
 
-    private static var table: Bundle?
+    /// Built once and never mutated, so L() is safe from any thread (the Retina unlock and DDC run off main).
+    private static let tables: [String: Bundle] = Dictionary(uniqueKeysWithValues: languages.compactMap { language in
+        Bundle.main.path(forResource: language.code, ofType: "lproj").flatMap(Bundle.init(path:)).map { (language.code, $0) }
+    })
 
     static func text(_ key: String) -> String {
         if englishOnly { return key }
-        guard let code = chosen else { return NSLocalizedString(key, comment: "") }
-        if table == nil, let path = Bundle.main.path(forResource: code, ofType: "lproj") {
-            table = Bundle(path: path)
-        }
-        return table?.localizedString(forKey: key, value: key, table: nil) ?? key
+        guard let code = chosen, let table = tables[code] else { return NSLocalizedString(key, comment: "") }
+        return table.localizedString(forKey: key, value: key, table: nil)
     }
 }
 

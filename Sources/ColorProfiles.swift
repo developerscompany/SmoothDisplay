@@ -367,8 +367,9 @@ enum ColorProfiles {
     static func profileURL(_ display: ExternalDisplay, _ target: WhiteTarget) -> URL {
         let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
         var model = String(display.name.replacingOccurrences(of: " ", with: "-").filter(allowed.contains).prefix(60))
-        // Names that are not Latin (or the localized "Monitor N" fallback) would collapse to nothing useful.
-        if !model.contains(where: \.isLetter) { model = display.key }
+        // No real name (the "Monitor N" fallback changes with the language and display id), or a name that is not
+        // Latin and would collapse to nothing useful: use the stable key.
+        if !display.hasName || !model.contains(where: \.isLetter) { model = display.key }
         return folder.appendingPathComponent("SmoothDisplay-\(model)-\(target.fileTag).icc")
     }
 
